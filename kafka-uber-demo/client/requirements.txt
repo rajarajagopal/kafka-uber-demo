@@ -1,5 +1,4 @@
 kafka-python==2.0.2
-openai==1.31.0
 tqdm
 python-dotenv
 
