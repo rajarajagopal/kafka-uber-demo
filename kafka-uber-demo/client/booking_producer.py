@@ -1,93 +1,63 @@
-import os
 import json
-import time
 import random
-import datetime
-import requests
 from kafka import KafkaProducer
-from kafka.errors import KafkaError
+import openrouteservice
+from openrouteservice.exceptions import ApiError
 
-# === CONFIGURATION ===
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9094")
-KAFKA_TOPIC = "uber-booking"
-ORS_API_KEY = os.getenv("ORS_API_KEY", "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjZjY2NlMGY1NWE4ODRlZDM4M2FmYTcwNjdiMzI1MjRkIiwiaCI6Im11cm11cjY0In0=")  # Replace with your key
+# Replace with your actual OpenRouteService API key
+ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjZjY2NlMGY1NWE4ODRlZDM4M2FmYTcwNjdiMzI1MjRkIiwiaCI6Im11cm11cjY0In0="
 
-# === DRIVERS DB (Simulated Nearby Driver Pool) ===
-DRIVERS = [
-    {"name": "Arun", "lat": 13.098, "lon": 77.610},
-    {"name": "Divya", "lat": 13.092, "lon": 77.615},
-    {"name": "Ravi", "lat": 13.087, "lon": 77.605},
-    {"name": "Sneha", "lat": 13.101, "lon": 77.620},
-    {"name": "Vikram", "lat": 13.095, "lon": 77.612}
+producer = KafkaProducer(
+    bootstrap_servers='localhost:9094',
+    value_serializer=lambda v: json.dumps(v).encode('utf-8')
+)
+
+# Simulated drivers list
+drivers = [
+    {"id": "DRV101", "name": "Vishnu", "car": "KA01AB1234"},
+    {"id": "DRV102", "name": "Kashaf", "car": "KA02CD5678"},
+    {"id": "DRV103", "name": "Hari", "car": "KA03EF9012"}
 ]
 
-# === FUNCTIONS ===
-def geocode_location(location: str):
+# Get input
+name = input("Passenger Name: ")
+pickup_location = input("Enter pickup location: ")
+drop_location = input("Enter drop location: ")
+
+# Geocode using OpenRouteService
+client = openrouteservice.Client(key=ORS_API_KEY)
+
+def get_coordinates(place_name):
     try:
-        response = requests.get(
-            "https://api.openrouteservice.org/geocode/search",
-            params={"api_key": ORS_API_KEY, "text": f"{location}, Bangalore", "size": 1},
-            timeout=5
-        )
-        response.raise_for_status()
-        coords = response.json()["features"][0]["geometry"]["coordinates"]
-        return coords[1], coords[0]  # (lat, lon)
-    except Exception as e:
-        print(f"❌ Geocoding failed for '{location}': {e}")
-        return None, None
+        result = client.pelias_search(text=place_name)
+        coords = result['features'][0]['geometry']['coordinates']
+        return coords[::-1]  # return as (lat, lon)
+    except (IndexError, ApiError):
+        print(f"❌ Failed to find location: {place_name}")
+        return None
 
-def find_nearest_driver(pickup_lat, pickup_lon):
-    def distance(d):
-        return ((d["lat"] - pickup_lat) ** 2 + (d["lon"] - pickup_lon) ** 2) ** 0.5
-    return min(DRIVERS, key=distance)
+pickup_coords = get_coordinates(pickup_location)
+drop_coords = get_coordinates(drop_location)
 
-def create_producer():
-    try:
-        producer = KafkaProducer(
-            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-            retries=3
-        )
-        print(f"✅ Connected to Kafka at {KAFKA_BOOTSTRAP_SERVERS}")
-        return producer
-    except KafkaError as e:
-        print(f"❌ Kafka Connection Error: {e}")
-        exit(1)
+if not pickup_coords or not drop_coords:
+    print("❌ Invalid pickup or drop location. Exiting.")
+    exit(1)
 
-# === MAIN ===
-if __name__ == "__main__":
-    producer = create_producer()
+# Randomly assign a driver
+assigned_driver = random.choice(drivers)
 
-    while True:
-        name = input("👤 Enter passenger name (or 'exit'): ").strip()
-        if name.lower() == "exit":
-            break
+booking_event = {
+    "passenger": name,
+    "pickup_location": pickup_location,
+    "pickup_coordinates": pickup_coords,
+    "drop_location": drop_location,
+    "drop_coordinates": drop_coords,
+    "driver": assigned_driver
+}
 
-        pickup_text = input("📍 Pickup location: ").strip()
-        drop_text = input("🎯 Drop location: ").strip()
-
-        pickup_lat, pickup_lon = geocode_location(pickup_text)
-        drop_lat, drop_lon = geocode_location(drop_text)
-
-        if not all([pickup_lat, pickup_lon, drop_lat, drop_lon]):
-            print("⚠️ Booking skipped due to geocoding failure.\n")
-            continue
-
-        driver = find_nearest_driver(pickup_lat, pickup_lon)
-        booking_id = f"BK{random.randint(1000, 9999)}"
-
-        payload = {
-            "booking_id": booking_id,
-            "passenger_name": name,
-            "pickup_location": {"text": pickup_text, "lat": pickup_lat, "lon": pickup_lon},
-            "drop_location": {"text": drop_text, "lat": drop_lat, "lon": drop_lon},
-            "driver": {"name": driver["name"], "lat": driver["lat"], "lon": driver["lon"]},
-            "cab_number": f"KA-{random.randint(10, 99)}-{random.randint(1000, 9999)}",
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
-        }
-
-        producer.send(KAFKA_TOPIC, payload)
-        print(f"✅ Booking Confirmed!\n🚖 Driver: {driver['name']} | Cab: {payload['cab_number']}\n📦 Sent to Kafka\n")
-
-    print("👋 Exiting.")
+# Send message
+producer.send('booking-topic', booking_event)
+producer.flush()
+print("✅ Booking request sent to Kafka:")
+print(json.dumps(booking_event, indent=2))
 

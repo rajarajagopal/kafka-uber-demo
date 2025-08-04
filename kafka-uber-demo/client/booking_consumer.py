@@ -2,8 +2,8 @@ from kafka import KafkaConsumer
 import json
 
 consumer = KafkaConsumer(
-    "uber-booking",
-    bootstrap_servers="localhost:9092",
+    "booking-topic",
+    bootstrap_servers="localhost:9094",
     value_deserializer=lambda v: json.loads(v.decode("utf-8")),
     auto_offset_reset="earliest",  # to see old messages too
     enable_auto_commit=True,
