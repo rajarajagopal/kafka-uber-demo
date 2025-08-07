@@ -2,7 +2,7 @@ import json
 import redis
 import threading
 import requests
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, KafkaProducer
 
 # Redis setup
 redis_client = redis.Redis(host="localhost", port=6379, db=0)
@@ -11,6 +11,13 @@ redis_client = redis.Redis(host="localhost", port=6379, db=0)
 KAFKA_BOOTSTRAP_SERVERS = "localhost:9094"
 DRIVER_TOPIC = "cab-locations"
 PASSENGER_TOPIC = "ride-requests"
+MATCHED_TOPIC = "matched-rides"
+
+# Kafka producer
+producer = KafkaProducer(
+    bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+    value_serializer=lambda x: json.dumps(x).encode("utf-8"),
+)
 
 def store_driver_in_redis(driver):
     driver_id = driver.get("driver_id")
@@ -91,6 +98,14 @@ def handle_passenger_messages():
         if match:
             print("✅ Best match:")
             print(json.dumps(match, indent=2))
+
+            result = {
+                "passenger": passenger,
+                "driver": match
+            }
+            producer.send(MATCHED_TOPIC, value=result)
+            producer.flush()
+            print(f"📤 Published matched ride to '{MATCHED_TOPIC}'")
         else:
             print("⚠️ No suitable match found.")
 
